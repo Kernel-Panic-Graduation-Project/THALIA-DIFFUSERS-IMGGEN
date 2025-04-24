@@ -2,7 +2,7 @@ import argparse
 import torch
 
 from PIL import Image
-from diffusers import StableDiffusionImg2ImgPipeline, EulerAncestralDiscreteScheduler
+from diffusers import StableDiffusionXLImg2ImgPipeline, EulerAncestralDiscreteScheduler
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base_image_path',    default=None,                       type=str,   help='Path to the image to be upscaled.'           )
@@ -27,7 +27,7 @@ parser.add_argument('--prompt',             default='spiderman',                
 parser.add_argument('--negative_prompt',    default='bad quality',              type=str,   help='Negative prompt for the image generation.'   )
 args = parser.parse_args()
 
-MODEL_DIR          = f'{args.model_dir}/realcartoon3d_v11'
+MODEL_DIR          = f'{args.model_dir}'
 EMBEDDING_DIR      = args.embedding_dir
 OUTPUT_DIR         = args.output_dir
 BASE_IMAGE_NAME    = f'{args.input_dir}/{args.base_image_name}.png'
@@ -51,39 +51,43 @@ base_image = Image.open(BASE_IMAGE_NAME).convert('RGB')
 
 # LOAD MODEL -------------------------------------------------------------------
 generator = torch.Generator(device='cuda').manual_seed(SEED)
-img2img = StableDiffusionImg2ImgPipeline.from_pretrained(
-    MODEL_DIR,
-    torch_dtype=torch.float16,
-    safety_checker=None,
-    local_files_only=True
-).to('cuda')
-# ------------------------------------------------------------------------------
 
-# LOAD SCHEDULER ---------------------------------------------------------------
-img2img.scheduler = EulerAncestralDiscreteScheduler.from_config(
-    img2img.scheduler.config
+img2img = StableDiffusionXLImg2ImgPipeline.from_single_file(
+  f'{MODEL_DIR}/realcartoonXL_v7.safetensors',
+  torch_dtype=torch.float16,
+  safety_checker=None,
+  local_files_only=True
 )
 # ------------------------------------------------------------------------------
 
+# LOAD SCHEDULER ---------------------------------------------------------------
+img2img.scheduler = EulerAncestralDiscreteScheduler.from_config(img2img.scheduler.config)
+# ------------------------------------------------------------------------------
+
 # CLIP SKIP --------------------------------------------------------------------
-total_layers = img2img.text_encoder.config.num_hidden_layers
-img2img.text_encoder.num_hidden_layers = total_layers - CLIP_SKIP
+img2img.text_encoder.text_model.encoder.layers=img2img.text_encoder.text_model.encoder.layers[:-CLIP_SKIP]
 # ------------------------------------------------------------------------------
 
 # LOAD NEGATIVE EMBEDDINGS -----------------------------------------------------
-img2img.load_textual_inversion(f'{EMBEDDING_DIR}/badhandv4.pt', weight_name='badhandv4')
+img2img.load_textual_inversion(f'{EMBEDDING_DIR}/badhandv4.pt', weight_name='badhandv4', token='<badhandv4>')
+img2img.load_textual_inversion(f'{EMBEDDING_DIR}/easynegative.safetensors', weight_name='easynegative.safetensors', token='<easynegative>')
 # ------------------------------------------------------------------------------
 
+# LOAD LORA WEIGHTS ------------------------------------------------------------
+# img2img.load_lora_weights(f'models/lora/princess_V1.safetensors', weight_name='princess_V1.safetensors')
+# ------------------------------------------------------------------------------
 
 # UPSCALE ----------------------------------------------------------------------
+img2img.to('cuda')
+
 base_resized = base_image.resize(( WIDTH * UPSCALE_FACTOR, HEIGHT * UPSCALE_FACTOR), resample=Image.LANCZOS)
 img2img(
-    prompt=PROMPT,
-    negative_prompt=NEGATIVE_PROMPT,
-    image=base_resized,
-    strength=DENOISING_STRENGTH,
-    guidance_scale=GUIDANCE_SCALE,
-    num_inference_steps=STEPS,
-    generator=generator
+  prompt=PROMPT,
+  negative_prompt=NEGATIVE_PROMPT,
+  image=base_resized,
+  strength=DENOISING_STRENGTH,
+  guidance_scale=GUIDANCE_SCALE,
+  num_inference_steps=STEPS,
+  generator=generator
 ).images[0].save(f'{OUTPUT_DIR}/{IMAGE_NAME}.png')
 # ------------------------------------------------------------------------------

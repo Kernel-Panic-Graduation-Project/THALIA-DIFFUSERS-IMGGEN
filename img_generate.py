@@ -2,8 +2,7 @@ from datetime import datetime
 import argparse
 import torch
 
-from PIL import Image
-from diffusers import StableDiffusionPipeline, EulerAncestralDiscreteScheduler
+from diffusers import StableDiffusionXLPipeline, EulerAncestralDiscreteScheduler, DPMSolverMultistepScheduler
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_dir',          default='models/stable_diffusion', type=str,   help='Path to the SD models directory.'            )
@@ -22,7 +21,7 @@ parser.add_argument('--prompt',             default='spiderman',               t
 parser.add_argument('--negative_prompt',    default='bad quality',             type=str,   help='Negative prompt for the image generation.'   )
 args = parser.parse_args()
 
-MODEL_DIR          = f'{args.model_dir}/realcartoon3d_v11'
+MODEL_DIR          = f'{args.model_dir}'
 EMBEDDING_DIR      = args.embedding_dir
 OUTPUT_DIR         = args.output_dir
 IMAGE_NAME         = args.image_name
@@ -39,45 +38,44 @@ NEGATIVE_PROMPT = args.negative_prompt
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 #==================================================================================================================================================================
 
-
 # LOAD MODEL -------------------------------------------------------------------
 generator = torch.Generator(device='cuda').manual_seed(SEED)
 
-txt2img = StableDiffusionPipeline.from_pretrained(
-    pretrained_model_name_or_path=MODEL_DIR,
-    torch_dtype=torch.float16,
-    safety_checker=None,
-    local_files_only=True
-).to('cuda')
+txt2img = StableDiffusionXLPipeline.from_single_file(
+  f'{MODEL_DIR}/realcartoonXL_v7.safetensors',
+  torch_dtype=torch.float16,
+  safety_checker=None,
+  local_files_only=True
+)
 # ------------------------------------------------------------------------------
 
 # LOAD SCHEDULER ---------------------------------------------------------------
-txt2img.scheduler = EulerAncestralDiscreteScheduler.from_config(
-    txt2img.scheduler.config
-)
+txt2img.scheduler = EulerAncestralDiscreteScheduler.from_config(txt2img.scheduler.config)
 # ------------------------------------------------------------------------------
 
 # CLIP SKIP --------------------------------------------------------------------
-total_layers = txt2img.text_encoder.config.num_hidden_layers
-txt2img.text_encoder.num_hidden_layers = total_layers - CLIP_SKIP
+txt2img.text_encoder.text_model.encoder.layers=txt2img.text_encoder.text_model.encoder.layers[:-CLIP_SKIP]
 # ------------------------------------------------------------------------------
-
 
 # LOAD NEGATIVE EMBEDDINGS -----------------------------------------------------
-txt2img.load_textual_inversion(
-  f'{EMBEDDING_DIR}/badhandv4.pt', weight_name='badhandv4'
-)
+txt2img.load_textual_inversion(f'{EMBEDDING_DIR}/badhandv4.pt', weight_name='badhandv4', token='<badhandv4>')
+txt2img.load_textual_inversion(f'{EMBEDDING_DIR}/easynegative.safetensors', weight_name='easynegative.safetensors', token='<easynegative>')
 # ------------------------------------------------------------------------------
 
+# LOAD LORA WEIGHTS ------------------------------------------------------------
+# txt2img.load_lora_weights(f'models/lora/princess_xl_v2.safetensors', weight_name='princess_xl_v2.safetensors')
+# ------------------------------------------------------------------------------
 
 # INFERENCE --------------------------------------------------------------------
+txt2img.to('cuda')
+
 txt2img(
-    prompt=PROMPT,
-    negative_prompt=NEGATIVE_PROMPT,
-    width=WIDTH,
-    height=HEIGHT,
-    guidance_scale=GUIDANCE_SCALE,
-    num_inference_steps=STEPS,
-    generator=generator
+  prompt=PROMPT,
+  negative_prompt=NEGATIVE_PROMPT,
+  width=WIDTH,
+  height=HEIGHT,
+  guidance_scale=GUIDANCE_SCALE,
+  num_inference_steps=STEPS,
+  generator=generator
 ).images[0].save(f'{OUTPUT_DIR}/{IMAGE_NAME}.png')
 # ------------------------------------------------------------------------------
